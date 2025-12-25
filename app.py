@@ -34,9 +34,7 @@ st.markdown("""
     .stButton>button {
         background-image: linear-gradient(to right, #1FA2FF 0%, #12D8FA  51%, #1FA2FF  100%);
         border-radius: 50px; color: white; border: none; width: 100%; font-weight: bold;
-        transition: 0.3s;
     }
-    .stButton>button:hover { transform: scale(1.02); }
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
 </style>
@@ -50,16 +48,15 @@ except:
     api_key = st.sidebar.text_input("Clé API Groq", type="password")
 
 if not api_key:
-    st.info("👋 Veuillez configurer la clé API dans les secrets Streamlit (Paramètres -> Secrets).")
+    st.info("👋 Veuillez configurer la clé API dans les secrets Streamlit.")
     st.stop()
 
 client = Groq(api_key=api_key)
 
-def transcribe_audio(audio_bytes):
+def transcribe_audio(audio_file_obj):
     try:
-        # On utilise le modèle whisper stable
         transcription = client.audio.transcriptions.create(
-            file=("audio.wav", audio_bytes), 
+            file=("audio.wav", audio_file_obj), 
             model="whisper-large-v3",
             language="fr"
         )
@@ -69,20 +66,7 @@ def transcribe_audio(audio_bytes):
         return None
 
 def get_python_code(df_head, instruction):
-    # Mise à jour vers le nouveau modèle llama-3.3-70b-versatile
-    prompt = f"""
-    Tu es un data scientist expert. Voici le head d'un DataFrame nommé 'df' :
-    {df_head}
-    
-    Instruction de l'utilisateur : {instruction}
-    
-    Écris UNIQUEMENT le code Python pur pour modifier ce DataFrame 'df'. 
-    Règles :
-    - Pas de texte explicatif.
-    - Pas de balises markdown (comme ```python).
-    - Ne pas recharger le fichier.
-    - Utilise pandas (déjà importé sous 'pd') et numpy (déjà importé sous 'np').
-    """
+    prompt = f"DataFrame 'df' head:\n{df_head}\nInstruction: {instruction}\nÉcris UNIQUEMENT le code Python pur pour modifier 'df'. Pas de texte, pas de balises markdown."
     completion = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
@@ -101,7 +85,7 @@ with st.container():
 
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
-    with st.expander("👁️ Aperçu des données originales"):
+    with st.expander("👁️ Aperçu des données"):
         st.dataframe(df.head(), use_container_width=True)
 
     with st.container():
@@ -110,51 +94,39 @@ if uploaded_file:
         instruction = ""
         
         with tab1:
-            st.write("Le micro nécessite que FFmpeg soit installé sur le serveur.")
             audio = audiorecorder("🔴 Enregistrer", "⬛ Stop")
             if len(audio) > 0:
                 with st.spinner("L'IA écoute votre voix..."):
-                    transcribed = transcribe_audio(audio.tobytes())
+                    # --- CORRECTION ICI : Conversion en WAV ---
+                    audio_bio = io.BytesIO()
+                    audio.export(audio_bio, format="wav")
+                    audio_bio.seek(0) # On remet au début du fichier
+                    transcribed = transcribe_audio(audio_bio)
+                    # ------------------------------------------
                     if transcribed:
                         st.success(f"Compris : \"{transcribed}\"")
                         instruction = transcribed
         
         with tab2:
-            text_input = st.text_area("Exemple: 'Ajoute 20% à la colonne prix' ou 'Supprime les lignes vides'...")
+            text_input = st.text_area("Exemple: 'Ajoute 20% à la colonne prix'...")
             if text_input: instruction = text_input
 
     if instruction:
         if st.button("✨ Lancer la Magie"):
             try:
-                # 1. Génération du code
-                with st.spinner("Génération du code..."):
-                    code = get_python_code(df.head().to_string(), instruction)
-                
-                # 2. Exécution du code
-                # On prépare l'environnement pour exec()
+                code = get_python_code(df.head().to_string(), instruction)
                 local_vars = {'df': df, 'pd': pd, 'np': np}
                 exec(code, {}, local_vars)
                 df_new = local_vars['df']
-                
                 st.balloons()
                 st.success("Modifications terminées !")
+                st.dataframe(df_new.head())
                 
-                # Affichage du résultat
-                st.write("#### Résultat :")
-                st.dataframe(df_new.head(), use_container_width=True)
-                
-                # Préparation du téléchargement
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     df_new.to_excel(writer, index=False)
-                
-                st.download_button(
-                    label="📥 Télécharger le fichier modifié",
-                    data=buffer.getvalue(),
-                    file_name="resultat_ia.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                st.download_button("📥 Télécharger le résultat", buffer.getvalue(), "resultat.xlsx")
             except Exception as e:
-                st.error(f"Désolé, l'IA a rencontré une erreur technique : {e}")
+                st.error(f"Erreur : {e}")
 else:
-    st.info("👆 Commencez par glisser-déposer un fichier Excel pour activer l'IA.")
+    st.info("👆 Commencez par glisser un fichier Excel.")
