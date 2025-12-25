@@ -7,7 +7,7 @@ import time
 import numpy as np
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Excel AI Surgical", page_icon="🎯", layout="centered")
+st.set_page_config(page_title="Réginalde GROSSE Tête", page_icon="🎯", layout="centered")
 
 # --- DESIGN & CSS ---
 st.markdown("""
@@ -93,7 +93,7 @@ def get_python_code(df_head, instruction):
 
 st.title("🎯 Assistant Excel Précis")
 
-uploaded_file = st.file_uploader("Avec ta grosse tête faut deposer ton fichier là", type=['xlsx'], label_visibility="collapsed")
+uploaded_file = st.file_uploader("Faut mettre ton dossier mais avant faut porter un verre ", type=['xlsx'], label_visibility="collapsed")
 
 if uploaded_file:
     # On garde une copie du fichier original en mémoire
