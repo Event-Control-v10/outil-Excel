@@ -4,6 +4,7 @@ from groq import Groq
 from audiorecorder import audiorecorder
 import io
 import time
+import numpy as np
 
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Excel AI Magic", page_icon="✨", layout="centered")
@@ -29,11 +30,13 @@ st.markdown("""
         backdrop-filter: blur(4px);
         margin-bottom: 20px;
     }
-    h1 { color: white !important; text-align: center; font-weight: 800; }
+    h1 { color: white !important; text-align: center; font-weight: 800; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); }
     .stButton>button {
         background-image: linear-gradient(to right, #1FA2FF 0%, #12D8FA  51%, #1FA2FF  100%);
         border-radius: 50px; color: white; border: none; width: 100%; font-weight: bold;
+        transition: 0.3s;
     }
+    .stButton>button:hover { transform: scale(1.02); }
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
 </style>
@@ -47,13 +50,14 @@ except:
     api_key = st.sidebar.text_input("Clé API Groq", type="password")
 
 if not api_key:
-    st.info("👋 Veuillez configurer la clé API dans les secrets Streamlit.")
+    st.info("👋 Veuillez configurer la clé API dans les secrets Streamlit (Paramètres -> Secrets).")
     st.stop()
 
 client = Groq(api_key=api_key)
 
 def transcribe_audio(audio_bytes):
     try:
+        # On utilise le modèle whisper stable
         transcription = client.audio.transcriptions.create(
             file=("audio.wav", audio_bytes), 
             model="whisper-large-v3",
@@ -61,12 +65,26 @@ def transcribe_audio(audio_bytes):
         )
         return transcription.text
     except Exception as e:
+        st.error(f"Erreur de transcription : {e}")
         return None
 
 def get_python_code(df_head, instruction):
-    prompt = f"DataFrame 'df' head:\n{df_head}\nInstruction: {instruction}\nÉcris le code Python pur pour modifier 'df'. Pas de texte, pas de balises markdown."
+    # Mise à jour vers le nouveau modèle llama-3.3-70b-versatile
+    prompt = f"""
+    Tu es un data scientist expert. Voici le head d'un DataFrame nommé 'df' :
+    {df_head}
+    
+    Instruction de l'utilisateur : {instruction}
+    
+    Écris UNIQUEMENT le code Python pur pour modifier ce DataFrame 'df'. 
+    Règles :
+    - Pas de texte explicatif.
+    - Pas de balises markdown (comme ```python).
+    - Ne pas recharger le fichier.
+    - Utilise pandas (déjà importé sous 'pd') et numpy (déjà importé sous 'np').
+    """
     completion = client.chat.completions.create(
-        model="llama3-70b-8192",
+        model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1
     )
@@ -79,44 +97,64 @@ st.title("✨ Assistant Excel IA")
 
 with st.container():
     st.write("### 📂 Étape 1 : Votre Fichier")
-    uploaded_file = st.file_uploader("Upload", type=['xlsx'], label_visibility="collapsed")
+    uploaded_file = st.file_uploader("Upload", type=['xlsx', 'xls'], label_visibility="collapsed")
 
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
-    with st.expander("👁️ Aperçu des données"):
+    with st.expander("👁️ Aperçu des données originales"):
         st.dataframe(df.head(), use_container_width=True)
 
     with st.container():
         st.write("### 🗣️ Étape 2 : Votre Instruction")
         tab1, tab2 = st.tabs(["🎙️ Vocal", "⌨️ Texte"])
         instruction = ""
+        
         with tab1:
+            st.write("Le micro nécessite que FFmpeg soit installé sur le serveur.")
             audio = audiorecorder("🔴 Enregistrer", "⬛ Stop")
             if len(audio) > 0:
-                transcribed = transcribe_audio(audio.tobytes())
-                if transcribed:
-                    st.info(f"Compris : \"{transcribed}\"")
-                    instruction = transcribed
+                with st.spinner("L'IA écoute votre voix..."):
+                    transcribed = transcribe_audio(audio.tobytes())
+                    if transcribed:
+                        st.success(f"Compris : \"{transcribed}\"")
+                        instruction = transcribed
+        
         with tab2:
-            text_input = st.text_area("Instruction texte...")
+            text_input = st.text_area("Exemple: 'Ajoute 20% à la colonne prix' ou 'Supprime les lignes vides'...")
             if text_input: instruction = text_input
 
     if instruction:
         if st.button("✨ Lancer la Magie"):
             try:
-                code = get_python_code(df.head().to_string(), instruction)
-                local_vars = {'df': df, 'pd': pd}
+                # 1. Génération du code
+                with st.spinner("Génération du code..."):
+                    code = get_python_code(df.head().to_string(), instruction)
+                
+                # 2. Exécution du code
+                # On prépare l'environnement pour exec()
+                local_vars = {'df': df, 'pd': pd, 'np': np}
                 exec(code, {}, local_vars)
                 df_new = local_vars['df']
-                st.balloons()
-                st.success("Terminé !")
-                st.dataframe(df_new.head())
                 
+                st.balloons()
+                st.success("Modifications terminées !")
+                
+                # Affichage du résultat
+                st.write("#### Résultat :")
+                st.dataframe(df_new.head(), use_container_width=True)
+                
+                # Préparation du téléchargement
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     df_new.to_excel(writer, index=False)
-                st.download_button("📥 Télécharger le résultat", buffer.getvalue(), "modifie.xlsx")
+                
+                st.download_button(
+                    label="📥 Télécharger le fichier modifié",
+                    data=buffer.getvalue(),
+                    file_name="resultat_ia.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
             except Exception as e:
-                st.error(f"Erreur : {e}")
+                st.error(f"Désolé, l'IA a rencontré une erreur technique : {e}")
 else:
-    st.info("👆 Commencez par uploader un fichier Excel.")
+    st.info("👆 Commencez par glisser-déposer un fichier Excel pour activer l'IA.")
